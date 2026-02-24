@@ -1,0 +1,52 @@
+$ python security_analyzer.py ../gera/
+Repository: gera
+Path: /Users/rkdavies/git/gera
+Collecting source files...
+Found 82 source files
+Warming up model (first request may be slow)...
+Warming up model huihui_ai/qwen3-coder-abliterated:30b...
+Model is ready
+Analyzing 82 files with huihui_ai/qwen3-coder-abliterated:30b...
+Split into 1 chunks (max 100000 chars each)
+Analyzing chunk 1/1 (32373 chars)...
+
+Report written to: /Users/rkdavies/git/zdfinder/security_reports/022326-gera/security_report.md
+
+Found 37 vulnerabilities
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
+  [High] CWE-121 - Stack Buffer Overflow
