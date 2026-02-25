@@ -12,6 +12,9 @@ from typing import List, Dict, Any, Optional
 OLLAMA_BASE_URL = "http://192.168.1.151:11434"
 MODEL_NAME = "huihui_ai/qwen3-coder-abliterated:30b"
 REQUEST_TIMEOUT = 600
+NUM_CTX = 8192
+NUM_GPU_LAYERS = 99
+DEFAULT_CHUNK_SIZE = 50000
 config = {"ollama_url": OLLAMA_BASE_URL}
 
 SKIP_DIRS = {
@@ -170,15 +173,16 @@ def pull_model() -> bool:
 
 
 def warmup_model() -> bool:
-    print(f"Warming up model {MODEL_NAME}...")
+    model = config.get("model", MODEL_NAME)
+    print(f"Warming up model {model}...")
     try:
         response = requests.post(
             f"{config['ollama_url']}/api/generate",
             json={
-                "model": MODEL_NAME,
+                "model": model,
                 "prompt": "Hello",
                 "stream": False,
-                "options": {"num_ctx": 32768},
+                "options": {"num_ctx": config.get("context_size", NUM_CTX)},
             },
             timeout=REQUEST_TIMEOUT,
         )
@@ -193,7 +197,10 @@ def warmup_model() -> bool:
         return False
 
 
-MAX_CHUNK_SIZE = 100000
+chunk_size = 50000
+
+
+MAX_RETRIES = 3
 
 
 def analyze_chunk(
@@ -209,40 +216,119 @@ Here is source code chunk {chunk_num} of {total_chunks}:
 
 Provide your analysis in JSON format. Include ALL vulnerabilities found in this chunk."""
 
-    try:
-        response = requests.post(
-            f"{config['ollama_url']}/api/generate",
-            json={
-                "model": MODEL_NAME,
-                "prompt": prompt,
-                "stream": False,
-                "format": "json",
-                "options": {"temperature": 0.1, "num_ctx": 32768},
-            },
-            timeout=REQUEST_TIMEOUT,
-        )
+    model = config.get("model", MODEL_NAME)
+    ctx_size = config.get("context_size", NUM_CTX)
+    debug = config.get("debug", False)
 
-        if response.status_code == 200:
-            result = response.json()
-            try:
-                return json.loads(result.get("response", "{}"))
-            except json.JSONDecodeError:
+    request_json = {
+        "model": model,
+        "prompt": prompt,
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": 0.1, "num_ctx": ctx_size},
+    }
+
+    if debug:
+        print(f"\n{'=' * 60}")
+        print(f"DEBUG: Chunk {chunk_num}/{total_chunks}")
+        print(f"{'=' * 60}")
+        print(f"REQUEST: POST {config['ollama_url']}/api/generate")
+        print(f"Model: {model}, Context: {ctx_size}")
+        print(f"Prompt length: {len(prompt)} chars")
+        print(f"Prompt preview:\n{prompt[:500]}...")
+        print(f"{'=' * 60}\n")
+
+    for attempt in range(MAX_RETRIES):
+        try:
+            response = requests.post(
+                f"{config['ollama_url']}/api/generate",
+                json=request_json,
+                timeout=REQUEST_TIMEOUT,
+            )
+
+            if response.status_code == 200:
+                result = response.json()
+                raw_response = result.get("response", "")
+
+                if debug:
+                    debug_dir = os.path.join(os.getcwd(), "debug_log")
+                    os.makedirs(debug_dir, exist_ok=True)
+                    debug_file = os.path.join(
+                        debug_dir, f"debug_chunk_{chunk_num}.json"
+                    )
+                    with open(debug_file, "w") as f:
+                        f.write(raw_response)
+                    print(f"{'=' * 60}")
+                    print(f"RESPONSE (status {response.status_code}):")
+                    print(f"Response length: {len(raw_response)} chars")
+                    print(f"Full response saved to: {debug_file}")
+                    print(f"Response preview:\n{raw_response[:1000]}...")
+                    print(f"{'=' * 60}\n")
+
+                if not raw_response or len(raw_response) < 10:
+                    if attempt < MAX_RETRIES - 1:
+                        print(
+                            f"  Empty response for chunk {chunk_num}, retrying ({attempt + 1}/{MAX_RETRIES})..."
+                        )
+                        continue
+                    return {
+                        "vulnerabilities": [],
+                        "summary": f"Empty response from chunk {chunk_num} after {MAX_RETRIES} attempts",
+                    }
+
+                try:
+                    parsed = json.loads(raw_response)
+                    if not parsed or not parsed.get("vulnerabilities"):
+                        if attempt < MAX_RETRIES - 1:
+                            print(
+                                f"  No vulnerabilities found in chunk {chunk_num}, retrying ({attempt + 1}/{MAX_RETRIES})..."
+                            )
+                            continue
+                    return parsed
+                except json.JSONDecodeError as e:
+                    if debug:
+                        print(f"JSON Parse Error: {e}")
+                        print(f"Raw response saved to: debug_chunk_{chunk_num}.json")
+                    if attempt < MAX_RETRIES - 1:
+                        print(
+                            f"  JSON parse error in chunk {chunk_num}, retrying ({attempt + 1}/{MAX_RETRIES})..."
+                        )
+                        continue
+                    return {
+                        "vulnerabilities": [],
+                        "summary": f"Failed to parse JSON response from chunk {chunk_num}",
+                        "raw_response": raw_response[:2000],
+                    }
+            else:
+                if debug:
+                    print(f"ERROR: HTTP {response.status_code}")
+                    print(f"Response: {response.text[:500]}")
+                if attempt < MAX_RETRIES - 1:
+                    print(
+                        f"  HTTP error {response.status_code} in chunk {chunk_num}, retrying ({attempt + 1}/{MAX_RETRIES})..."
+                    )
+                    continue
                 return {
                     "vulnerabilities": [],
-                    "summary": f"Failed to parse JSON response from chunk {chunk_num}",
-                    "raw_response": result.get("response", "")[:2000],
+                    "summary": f"Ollama API error: {response.status_code}",
                 }
-        else:
-            return {
-                "vulnerabilities": [],
-                "summary": f"Ollama API error: {response.status_code}",
-            }
-    except Exception as e:
-        return {"vulnerabilities": [], "summary": f"Error calling Ollama: {str(e)}"}
+        except Exception as e:
+            if debug:
+                print(f"EXCEPTION: {str(e)}")
+            if attempt < MAX_RETRIES - 1:
+                print(
+                    f"  Exception in chunk {chunk_num}: {str(e)}, retrying ({attempt + 1}/{MAX_RETRIES})..."
+                )
+                continue
+            return {"vulnerabilities": [], "summary": f"Error calling Ollama: {str(e)}"}
+
+    return {"vulnerabilities": [], "summary": f"Failed after {MAX_RETRIES} attempts"}
 
 
 def analyze_with_ollama(files: List[Dict[str, Any]], repo_name: str) -> Dict[str, Any]:
     print(f"Analyzing {len(files)} files with {MODEL_NAME}...")
+
+    chunk_size = config.get("chunk_size", DEFAULT_CHUNK_SIZE)
 
     all_vulnerabilities = []
     chunk_summaries = []
@@ -255,7 +341,7 @@ def analyze_with_ollama(files: List[Dict[str, Any]], repo_name: str) -> Dict[str
         file_entry = f"=== File: {f['path']} ===\n{f['content']}\n"
         file_size = len(file_entry)
 
-        if file_size > MAX_CHUNK_SIZE:
+        if file_size > chunk_size:
             if current_chunk:
                 chunks.append("\n".join(current_chunk))
                 current_chunk = []
@@ -271,7 +357,7 @@ def analyze_with_ollama(files: List[Dict[str, Any]], repo_name: str) -> Dict[str
                 test_content = (
                     f"=== File: {f['path']} ===\n" + "\n".join(test_lines) + "\n"
                 )
-                if len(test_content) > MAX_CHUNK_SIZE:
+                if len(test_content) > chunk_size:
                     if temp_lines:
                         files_in_chunk.append(
                             f"=== File: {f['path']} ===\n"
@@ -293,7 +379,7 @@ def analyze_with_ollama(files: List[Dict[str, Any]], repo_name: str) -> Dict[str
 
             continue
 
-        if current_size + file_size > MAX_CHUNK_SIZE:
+        if current_size + file_size > chunk_size:
             chunks.append("\n".join(current_chunk))
             current_chunk = []
             current_size = 0
@@ -308,14 +394,20 @@ def analyze_with_ollama(files: List[Dict[str, Any]], repo_name: str) -> Dict[str
         chunks.append("")
 
     total_chunks = len(chunks)
-    print(f"Split into {total_chunks} chunks (max {MAX_CHUNK_SIZE} chars each)")
+    verbose = config.get("verbose", False)
+    print(f"Split into {total_chunks} chunks (max {chunk_size} chars each)")
 
     for i, chunk in enumerate(chunks, 1):
         if not chunk.strip():
             continue
-        print(f"Analyzing chunk {i}/{total_chunks} ({len(chunk)} chars)...")
+        if verbose:
+            print(f"Analyzing chunk {i}/{total_chunks} ({len(chunk)} chars)...")
 
         result = analyze_chunk(chunk, i, total_chunks, repo_name)
+
+        if verbose:
+            vulns_found = len(result.get("vulnerabilities", []))
+            print(f"  Chunk {i}: Found {vulns_found} vulnerabilities")
 
         vulns = result.get("vulnerabilities", [])
         all_vulnerabilities.extend(vulns)
@@ -556,9 +648,43 @@ def main():
         action="store_true",
         help="Only preload the model and exit (useful for priming the cache)",
     )
+    parser.add_argument(
+        "--model",
+        default=MODEL_NAME,
+        help=f"Model to use (default: {MODEL_NAME})",
+    )
+    parser.add_argument(
+        "--context-size",
+        type=int,
+        default=NUM_CTX,
+        help=f"Context size (default: {NUM_CTX})",
+    )
+    parser.add_argument(
+        "--chunk-size",
+        type=int,
+        default=chunk_size,
+        help=f"Max chunk size in chars (default: {chunk_size})",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Verbose output",
+    )
+    parser.add_argument(
+        "-d",
+        "--debug",
+        action="store_true",
+        help="Debug mode - show API requests and responses",
+    )
 
     args = parser.parse_args()
     config["ollama_url"] = args.ollama_url
+    config["model"] = args.model
+    config["context_size"] = args.context_size
+    config["chunk_size"] = args.chunk_size
+    config["verbose"] = args.verbose
+    config["debug"] = args.debug
 
     if args.warmup or args.preload_only:
         if not check_ollama_available():
